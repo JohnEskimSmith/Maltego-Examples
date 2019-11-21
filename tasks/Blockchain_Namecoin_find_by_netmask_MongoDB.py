@@ -33,6 +33,65 @@ except ImportError as ontology_exception:
 # endregion
 
 
+def valid_ip(address):
+    """
+    Checks if string is a valid ip-address
+
+    :param str address:
+    :rtype: bool
+    """
+    try:
+        ipaddress.ip_address(address)
+        return True
+    except:
+        return False
+
+
+def ip_to_range(record_range: str):
+    _ip1, _ip2 = record_range.split('-')
+    ip1 = _ip1.strip()
+    ip2 = _ip2.strip()
+    if valid_ip(ip1) and valid_ip(ip2):
+        try:
+            if ipaddress.ip_address(ip1) < ipaddress.ip_address(ip2):
+                int_ip1 = int(ipaddress.ip_address(ip1))
+                int_ip2 = int(ipaddress.ip_address(ip2))
+                return [str(ipaddress.ip_address(i)) for i in range(int_ip1, int_ip2+1)]
+        except:
+            pass
+
+
+def get_network(cidr: str):
+    try:
+        return ipaddress.IPv4Network(cidr)
+    except ipaddress.AddressValueError:
+        try:
+            return ipaddress.IPv6Network(cidr)
+        except ipaddress.AddressValueError:
+            return None
+    except:
+        return None
+
+
+def check_range_record(record_range: str):
+    check_list = []
+    count_true = 4
+    if "-" in record_range:
+        check_list.append(True)
+        try:
+            part1, part2 = record_range.split('-')
+            check_list.append(True)
+            if valid_ip(part1) and valid_ip(part2):
+                check_list.append(True)
+                if ipaddress.ip_address(part1) < ipaddress.ip_address(part2):
+                    check_list.append(True)
+        except:
+            check_list.append(False)
+
+    return len(check_list) == count_true and all(check_list)
+
+
+
 def init_connect_to_mongodb(ip, port, dbname, username=None, password=None):
     """
     :param ip:  ip server MongoDB
@@ -134,18 +193,6 @@ def return_massive_about_ips(ips, server, user, password, cidr):
             yield row
 
 
-def get_network(cidr: str):
-    try:
-        return ipaddress.IPv4Network(cidr)
-    except ipaddress.AddressValueError:
-        try:
-            return ipaddress.IPv6Network(cidr)
-        except ipaddress.AddressValueError:
-            return None
-    except:
-        return None
-
-
 def grouper(count, iterable, fillvalue=None):
     """
     :param count: length of subblock
@@ -220,6 +267,9 @@ class NamecoinDomainBlocksExtended(metaclass=Schema):
             conditions=[not_empty(Header.domain), not_empty(Header.ip)])
 
 
+# for version - if netblock record like "195.32.16.0/24"
+
+
 class NamecoinHistoryNetblockMongoDB(Task):
 
     def __init__(self):
@@ -265,27 +315,77 @@ class NamecoinHistoryNetblockMongoDB(Task):
         return ep_coll
 
     def execute(self, enter_params, result_writer, log_writer, temp_dir=None):
-        # enter params
-        server = enter_params.server
-        netblock_enter_params = set(enter_params.blocks)
-        user = enter_params.usermongodb
-        password = enter_params.passwordmongodb
 
-        i = 1
-        group_count = 1000
-        result = []
-        for cidr in netblock_enter_params:
-            need_network = get_network(cidr)
-            if need_network:
-                blocks_ips = grouper(group_count, map(str, need_network))
-                for ips in blocks_ips:
-                    # return all document
-                    _result_lines = return_massive_about_ips(ips, server, user, password, cidr)
-                    check_ip_cidr = lambda row: ipaddress.ip_address(row['ip']) in need_network
-                    result_lines = filter(check_ip_cidr, _result_lines)
+        def return_result_canonical_notation_netblocks(set_of_netblocks, settings):
+            server, user, password = settings
+            i = 1
+            group_count = 1000
+            result = []
+            for cidr in set_of_netblocks:
+                need_network = get_network(cidr)
+                if need_network:
+                    blocks_ips = grouper(group_count, map(str, need_network))
+
+                    for ips in blocks_ips:
+                        # return all document
+                        _result_lines = return_massive_about_ips(ips, server, user, password, cidr)
+                        check_ip_cidr = lambda row: ipaddress.ip_address(row['ip']) in need_network
+                        result_lines = filter(check_ip_cidr, _result_lines)
+                        result.extend(list(result_lines))
+                    log_writer.info('ready:{}.\t{}'.format(i, cidr))
+                    i += 1
+            return result
+
+        def return_result_maltego_range_notation_netblocks(set_of_netblocks, settings):
+            server, user, password = settings
+            result = []
+            i = 1
+            group_count = 1000
+            array_ip = []
+            # array_ip = [ip for block in set_of_netblocks for ip in ip_to_range(block) if valid_ip(ip)] # ideal variant
+            for block in set_of_netblocks:
+                array_sub_block_ip = ip_to_range(block)
+                if array_sub_block_ip:
+                    array_ip.extend(array_sub_block_ip)
+            if not len(array_ip) > 0:
+                return []
+
+            blocks_ips = grouper(group_count, map(str, array_ip))
+            cidr = ''
+            for ips in blocks_ips:
+                _result_lines = return_massive_about_ips(ips, server, user, password, cidr)
+                check_ip_cidr = lambda row: row['ip'] in array_ip
+                result_lines = filter(check_ip_cidr, _result_lines)
+                try:
                     result.extend(list(result_lines))
-                log_writer.info('ready:{}.\t{}'.format(i, cidr))
-                i += 1
+                except:
+                    pass
+            return result
+
+        # enter params
+
+        netblock_enter_params = set(enter_params.blocks)
+
+        array_of_enter_params = {'canonical_notation': [],
+                                 'maltego_notation': []}
+        array_of_enter_params ['canonical_notation']= list(filter(get_network, netblock_enter_params))
+        array_of_enter_params['maltego_notation'] = list(filter(check_range_record, netblock_enter_params))
+
+        settings = [enter_params.server,
+                    enter_params.usermongodb,
+                    enter_params.passwordmongodb]
+        result = []
+
+        if len(array_of_enter_params ['canonical_notation']) > 0:
+            sub_result = return_result_canonical_notation_netblocks(array_of_enter_params ['canonical_notation'],
+                                                                    settings)
+            result.extend(sub_result)
+
+        if len(array_of_enter_params['maltego_notation']) > 0:
+            sub_result = return_result_maltego_range_notation_netblocks(array_of_enter_params ['maltego_notation'],
+                                                                        settings)
+            result.extend(sub_result)
+
         for line in sorted(result,  key=lambda line: line['date_time']):
             fields_table = NamecoinDomainExplorer.get_fields()
             tmp = NamecoinDomainExplorer.create_empty()
@@ -294,31 +394,3 @@ class NamecoinHistoryNetblockMongoDB(Task):
                     tmp[fields_table[field]] = line[field]
             result_writer.write_line(tmp, header_class=NamecoinDomainExplorer)
 
-#
-# if __name__ == '__main__':
-#     DEBUG = True
-#
-#     class EnterParamsFake:
-#         blocks = ['95.211.214.0/24','195.123.227.0/24', '134.255.0.0/24']
-#         server = "68.183.0.119:27017"
-#         usermongodb = "anonymous"
-#         passwordmongodb = "anonymous"
-#
-#
-#     class WriterFake:
-#         @classmethod
-#         # ResultWriter method
-#         def write_line(cls, values, header_class=None):
-#             print({f.system_name: v for f, v in values.items()})
-#
-#         @classmethod
-#         # LogWriter method
-#         def info(cls, message, *args):
-#             print(message, *args)
-#
-#         @classmethod
-#         # LogWriter method
-#         def error(cls, message, *args):
-#             print(message, *args)
-#
-#     NamecoinHistoryNetblockMongoDB().execute(EnterParamsFake, WriterFake, WriterFake, None)
