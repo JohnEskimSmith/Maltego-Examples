@@ -31,5 +31,3 @@ class NamecointoIP(DiscoverableTransform):
         except socket.error as e:
             response.addUIMessage("Error: " + str(e), UIM_TYPES["partial"])
 
-        # Write the slider value as a UI message - just for fun
-        response.addUIMessage("Slider value is at: " + str(request.Slider))
