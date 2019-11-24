@@ -22,7 +22,7 @@ class SearchPlaces(DiscoverableTransform):
 
                 url = template_url.format(host=host, port=port)
                 resource = send_post(url, json=input_data_json)
-            except:
+            except Exception as e:
                 response.addUIMessage("Error: " + str(e), UIM_TYPES["partial"])
             else:
                 if resource.status_code == 200:
