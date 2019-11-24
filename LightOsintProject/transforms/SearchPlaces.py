@@ -3,6 +3,10 @@ from requests import post as send_post
 from maltego_trx.transform import DiscoverableTransform
 from maltego_trx.maltego import UIM_TYPES
 import logging
+
+# my service
+# POST json like {"places": ["UN NY", "Moscow"]}
+# POST json like {"places": ["address1", "address2", "Company Name"]}
 host, port = "68.183.0.119", "8080"
 
 template_url ="http://{host}:{port}/tasks/proxy/places"
